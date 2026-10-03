@@ -1,0 +1,19 @@
+models:
+  - name: orders
+    description: Orders carrying governance metadata.
+    config:
+      tags: ["finance", "daily"]
+      meta:
+        owner: finance@example.com
+        tier: 1
+      group: finance
+      access: public
+    columns:
+      - name: order_id
+        description: Order identifier.
+        config:
+          tags: ["pii_free"]
+          meta:
+            semantic: identifier
+      - name: status
+        description: Fulfilment status.

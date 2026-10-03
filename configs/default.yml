@@ -1,0 +1,48 @@
+# dbt-isrm matrix configuration.
+# Paths are relative to this file.
+
+fixtures_dir: ../fixtures
+results_dir: ../results
+snapshots_dir: ../snapshots
+
+# Oldest first: reports compare each version with the one listed before it.
+versions:
+  - "2.0.0"
+  - "2.0.1"
+  - "2.0.2"
+  - "2.0.3"
+  - "2.0.4"
+  - "2.0.5"
+  - "2.0.6"
+
+fixtures:
+  - basic_model
+  - source
+  - columns_and_constraints
+  - meta_tags_groups
+  - disabled_resources
+  - exposure
+
+# Appended to every stage's arguments. Each run executes in a fresh copy of
+# the fixture, so the profile and DuckDB file are local to that copy.
+common_args:
+  - --generate-info-schema
+  - --project-dir
+  - .
+  - --profiles-dir
+  - .
+  - --target-path
+  - target
+  - --no-send-anonymous-usage-stats
+  - --no-version-check
+
+stages:
+  parse:
+    args: [parse]
+  compile:
+    args: [compile]
+  compile_strict:
+    args: [compile, --static-analysis, strict]
+  build:
+    args: [build]
+    warehouse: true

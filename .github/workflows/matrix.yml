@@ -1,0 +1,48 @@
+name: matrix
+
+on:
+  workflow_dispatch:
+    inputs:
+      versions:
+        description: Space-separated dbt releases, oldest first. Empty runs the configured list.
+        required: false
+        default: ""
+  schedule:
+    - cron: "0 6 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  matrix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+      - run: uv sync --locked
+
+      - name: Run matrix
+        env:
+          VERSIONS: ${{ inputs.versions }}
+        run: |
+          args=()
+          for v in $VERSIONS; do args+=(--version "$v"); done
+          uv run dbt-isrm run "${args[@]}"
+          uv run dbt-isrm report "${args[@]}"
+
+      - name: Job summary
+        if: always()
+        run: |
+          if [ -f results/report.md ]; then cat results/report.md >> "$GITHUB_STEP_SUMMARY"; fi
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: dbt-isrm-${{ github.run_id }}
+          path: |
+            results/
+            snapshots/
+            !snapshots/.gitkeep
+          if-no-files-found: error
+          retention-days: 90

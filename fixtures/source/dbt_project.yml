@@ -1,0 +1,10 @@
+name: source
+version: "1.0.0"
+config-version: 2
+profile: isrm
+
+model-paths: ["models"]
+
+# The source relation must exist for `build` to create the downstream view.
+on-run-start:
+  - "create table if not exists main.raw_orders as select cast(1 as integer) as order_id, cast('2026-01-01 00:00:00' as timestamp) as _loaded_at"

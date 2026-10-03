@@ -1,0 +1,6 @@
+name: basic_model
+version: "1.0.0"
+config-version: 2
+profile: isrm
+
+model-paths: ["models"]

@@ -1,0 +1,50 @@
+[project]
+name = "dbt-isrm"
+version = "0.1.0"
+description = "Release matrix for dbt's Information Schema."
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.12"
+keywords = ["dbt", "information-schema", "parquet", "duckdb"]
+dependencies = [
+    "duckdb>=1.1",
+    "polars>=1.0",
+    "pydantic>=2.7",
+    "pyyaml>=6.0",
+    "typer>=0.12",
+]
+
+[project.urls]
+Repository = "https://github.com/AndreaBozzo/dbt-isrm"
+
+[project.scripts]
+dbt-isrm = "dbt_isrm.cli:app"
+
+[dependency-groups]
+dev = [
+    "pyright>=1.1.414",
+    "pytest>=8",
+    "ruff>=0.6",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "integration: runs a real dbt release (downloads it on first use)",
+]
+
+[tool.pyright]
+include = ["src"]
+venvPath = "."
+venv = ".venv"

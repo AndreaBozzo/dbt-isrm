@@ -1,0 +1,16 @@
+exposures:
+  - name: orders_dashboard
+    label: Orders Dashboard
+    type: dashboard
+    maturity: high
+    url: https://example.com/dashboards/orders
+    description: Dashboard reporting on orders.
+    depends_on:
+      - ref('orders')
+    owner:
+      name: Analytics Team
+      email: analytics@example.com
+    config:
+      tags: ["reporting"]
+      meta:
+        tool: example_bi

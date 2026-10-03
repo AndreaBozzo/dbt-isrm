@@ -1,0 +1,7 @@
+sources:
+  - name: raw
+    schema: main
+    config:
+      enabled: false
+    tables:
+      - name: disabled_table

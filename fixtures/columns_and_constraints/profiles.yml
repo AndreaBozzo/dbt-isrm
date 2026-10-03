@@ -1,0 +1,7 @@
+isrm:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      path: isrm.duckdb
+      threads: 1
