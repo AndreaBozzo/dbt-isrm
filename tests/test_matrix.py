@@ -1,6 +1,7 @@
 from datetime import UTC, datetime
 
 import polars as pl
+import pytest
 from conftest import write_parquet
 
 from dbt_isrm import matrix
@@ -14,7 +15,13 @@ def make_record(version, fixture, stage, artifact_root, exit_code=0):
         dbt_version=version,
         fixture=fixture,
         stage=stage,
+        invocation_id="00000000-0000-0000-0000-000000000000",
         dbt_args=[stage],
+        dbt_version_output=f"dbt {version}",
+        dbt_wheel_tag="cp311-abi3-win_amd64",
+        dbt_binary_sha256="0" * 64,
+        os="Windows 11",
+        arch="AMD64",
         warehouse=False,
         started_at=datetime(2026, 1, 1, tzinfo=UTC),
         duration_ms=1,
@@ -113,3 +120,25 @@ def test_classify_fields():
         "never": "never populated",
         "unseen": "no rows observed",
     }
+
+
+def test_results_from_an_older_schema_are_refused(tmp_path):
+    results, snaps = tmp_path / "results", tmp_path / "snapshots"
+    results.mkdir()
+    pl.DataFrame({"dbt_version": ["2.0.6"], "fixture": ["f"], "stage": ["parse"]}).write_parquet(
+        results / "runs.parquet"
+    )
+    a = snapshot(snaps, "2.0.6", "f", "parse", "SELECT 'x' AS a")
+    with pytest.raises(matrix.IncompatibleResults, match="runs.parquet"):
+        matrix.store(make_record("2.0.6", "f", "parse", a), results, snaps)
+
+
+def test_semantic_results_are_stored_per_cell(tmp_path):
+    results, snaps = tmp_path / "results", tmp_path / "snapshots"
+    a = snapshot(snaps, "2.0.6", "f", "build", "SELECT 'x' AS a")
+    matrix.store(make_record("2.0.6", "f", "build", a), results, snaps)
+    s = pl.read_parquet(results / "semantic.parquet")
+    # The fixture writes no dbt_rt.invocations table, so the check reports it missing.
+    assert s.select("expectation_id", "result").rows() == [
+        ("current_invocation_recorded", "missing")
+    ]

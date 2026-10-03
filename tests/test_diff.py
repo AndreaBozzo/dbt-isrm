@@ -1,9 +1,15 @@
 import polars as pl
 import pytest
 
-from dbt_isrm.diff import diff
-from dbt_isrm.models import MATRIX_SCHEMA, RUNS_SCHEMA
+from dbt_isrm.diff import diff as diff_versions
+from dbt_isrm.models import MATRIX_SCHEMA, RUNS_SCHEMA, SEMANTIC_SCHEMA
 from dbt_isrm.report import render_markdown, render_text
+
+NO_SEMANTIC = pl.DataFrame(schema=SEMANTIC_SCHEMA)
+
+
+def diff(m, r, a, b, semantic=NO_SEMANTIC):
+    return diff_versions(m, r, semantic, a, b)
 
 
 def col(
@@ -229,7 +235,9 @@ def test_markdown_report_has_every_section():
         ],
         [run("A"), run("B"), run("C")],
     )
-    md = render_markdown([diff(m, r, "A", "B"), diff(m, r, "B", "C")], ["f"], ["parse"])
+    md = render_markdown(
+        [diff(m, r, "A", "B"), diff(m, r, "B", "C")], ["f"], ["parse"], NO_SEMANTIC
+    )
     for heading in [
         "# dbt ISRM Report",
         "## Versions compared",
@@ -239,8 +247,8 @@ def test_markdown_report_has_every_section():
         "## Population changes",
         "## Semantic assertion changes",
         "## Execution changes",
-        "## Newly always-null fields",
-        "## Fields no longer always-null",
+        "## Newly never-populated fields",
+        "## Fields no longer never-populated",
     ]:
         assert heading in md
     assert "- A → B: 1/1 cells compared, changes" in md
@@ -248,3 +256,63 @@ def test_markdown_report_has_every_section():
     assert (
         "| `dbt.models.name` | f / parse | 0/1 populated | 1/1 populated | population gain |" in md
     )
+
+
+def sem(version, result, detail, cls="must", expectation="constraints_exposed"):
+    return {
+        "run_id": f"{version}-f-parse",
+        "dbt_version": version,
+        "fixture": "f",
+        "stage": "parse",
+        "expectation_id": expectation,
+        "expectation_class": cls,
+        "result": result,
+        "detail": detail,
+    }
+
+
+@pytest.mark.parametrize(
+    ("cls", "a", "b", "kind"),
+    [
+        ("must", ("pass", "x"), ("fail", "y"), "regression"),
+        ("must", ("fail", "y"), ("pass", "x"), "fixed"),
+        ("must", ("fail", "y"), ("fail", "z"), "change"),
+        ("open", ("pass", "x"), ("fail", "y"), "change"),
+        ("open", ("fail", "y"), ("missing", "IOException"), "change"),
+    ],
+)
+def test_semantic_change_kinds(cls, a, b, kind):
+    m, r = frames(
+        [col("A", "dbt.models", "name"), col("B", "dbt.models", "name")], [run("A"), run("B")]
+    )
+    s = pl.DataFrame([sem("A", *a, cls=cls), sem("B", *b, cls=cls)], schema=SEMANTIC_SCHEMA)
+    d = diff(m, r, "A", "B", semantic=s)
+    assert d.semantic_changes["kind"].to_list() == [kind]
+    assert not d.is_empty()
+
+
+def test_unchanged_semantic_result_is_not_a_change():
+    m, r = frames(
+        [col("A", "dbt.models", "name"), col("B", "dbt.models", "name")], [run("A"), run("B")]
+    )
+    s = pl.DataFrame([sem("A", "fail", "x"), sem("B", "fail", "x")], schema=SEMANTIC_SCHEMA)
+    assert diff(m, r, "A", "B", semantic=s).is_empty()
+
+
+def test_semantic_change_text_and_markdown():
+    m, r = frames(
+        [col("A", "dbt.models", "name"), col("B", "dbt.models", "name")], [run("A"), run("B")]
+    )
+    s = pl.DataFrame(
+        [sem("A", "fail", "order_id=NULL"), sem("B", "pass", "order_id=['not_null']")],
+        schema=SEMANTIC_SCHEMA,
+    )
+    d = diff(m, r, "A", "B", semantic=s)
+    assert (
+        "constraints_exposed (must)\n  f / parse  (fixed)\n"
+        "    fail: order_id=NULL\n    -> pass: order_id=['not_null']"
+    ) in render_text(d)
+    md = render_markdown([d], ["f"], ["parse"], s, frozenset({"B"}))
+    assert "- A → B (not in config): 1/1 cells compared, changes" in md
+    assert "| `constraints_exposed` (must) | f / parse | fail: order_id=NULL |" in md
+    assert "### Status in B" in md and "| `constraints_exposed` | must | 1/1 |" in md

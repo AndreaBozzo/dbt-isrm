@@ -38,6 +38,7 @@ class Diff:
     newly_never_populated: pl.DataFrame
     no_longer_never_populated: pl.DataFrame
     execution_changes: pl.DataFrame
+    semantic_changes: pl.DataFrame
 
     def is_empty(self) -> bool:
         return all(
@@ -52,6 +53,7 @@ class Diff:
                 "newly_never_populated",
                 "no_longer_never_populated",
                 "execution_changes",
+                "semantic_changes",
             )
         )
 
@@ -114,7 +116,34 @@ def _execution_changes(ra: pl.DataFrame, rb: pl.DataFrame) -> pl.DataFrame:
     return joined.filter(changed).rename({c: f"{c}_a" for c in [*cols, "has_artifacts"]}).sort(CELL)
 
 
-def diff(matrix: pl.DataFrame, runs: pl.DataFrame, a: str, b: str) -> Diff:
+def _semantic_changes(sa: pl.DataFrame, sb: pl.DataFrame) -> pl.DataFrame:
+    """Expectations whose result or observed value changed.
+
+    Only a `must` expectation going from pass to fail is a regression.
+    """
+    key = [*CELL, "expectation_id"]
+    joined = sa.select(*key, "expectation_class", "result", "detail").join(
+        sb.select(*key, "result", "detail"), on=key, suffix="_b"
+    )
+    must = pl.col("expectation_class") == "must"
+    kind = (
+        pl.when(must & (pl.col("result") == "pass") & (pl.col("result_b") != "pass"))
+        .then(pl.lit("regression"))
+        .when(must & (pl.col("result") != "pass") & (pl.col("result_b") == "pass"))
+        .then(pl.lit("fixed"))
+        .otherwise(pl.lit("change"))
+    )
+    return (
+        joined.filter(
+            (pl.col("result") != pl.col("result_b")) | (pl.col("detail") != pl.col("detail_b"))
+        )
+        .with_columns(kind=kind)
+        .rename({"result": "result_a", "detail": "detail_a"})
+        .sort(["expectation_id", *CELL])
+    )
+
+
+def diff(matrix: pl.DataFrame, runs: pl.DataFrame, semantic: pl.DataFrame, a: str, b: str) -> Diff:
     ra = runs.filter(pl.col("dbt_version") == a)
     rb = runs.filter(pl.col("dbt_version") == b)
     for version, r in ((a, ra), (b, rb)):
@@ -165,4 +194,8 @@ def diff(matrix: pl.DataFrame, runs: pl.DataFrame, a: str, b: str) -> Diff:
         newly_never_populated=newly,
         no_longer_never_populated=no_longer,
         execution_changes=_execution_changes(ra.join(cells, on=CELL), rb.join(cells, on=CELL)),
+        semantic_changes=_semantic_changes(
+            semantic.filter(pl.col("dbt_version") == a).join(cells, on=CELL),
+            semantic.filter(pl.col("dbt_version") == b).join(cells, on=CELL),
+        ),
     )

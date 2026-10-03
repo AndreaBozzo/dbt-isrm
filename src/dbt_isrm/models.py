@@ -10,6 +10,17 @@ import polars as pl
 from pydantic import BaseModel
 
 
+class DbtBuild(BaseModel):
+    """What was actually executed for a requested dbt version."""
+
+    # Raw `dbt --version` output; it carries no build identifier of its own.
+    version_output: str
+    # Wheel tag of the installed release, e.g. `cp311-abi3-win_amd64`.
+    wheel_tag: str
+    # sha256 of the native module (`dbt/_core.*`): the build that ran.
+    binary_sha256: str
+
+
 class RunRecord(BaseModel):
     """One dbt invocation. Failed invocations are recorded too."""
 
@@ -17,7 +28,15 @@ class RunRecord(BaseModel):
     dbt_version: str
     fixture: str
     stage: str
+    # Passed as `--invocation-id`; derived from (fixture, stage), so the same
+    # cell gets the same id in every release.
+    invocation_id: str
     dbt_args: list[str]
+    dbt_version_output: str
+    dbt_wheel_tag: str
+    dbt_binary_sha256: str
+    os: str
+    arch: str
     warehouse: bool
     started_at: datetime
     duration_ms: int
@@ -37,7 +56,13 @@ RUNS_SCHEMA = {
     "dbt_version": pl.String,
     "fixture": pl.String,
     "stage": pl.String,
+    "invocation_id": pl.String,
     "dbt_args": pl.List(pl.String),
+    "dbt_version_output": pl.String,
+    "dbt_wheel_tag": pl.String,
+    "dbt_binary_sha256": pl.String,
+    "os": pl.String,
+    "arch": pl.String,
     "warehouse": pl.Boolean,
     "started_at": pl.Datetime("us", "UTC"),
     "duration_ms": pl.Int64,
@@ -73,6 +98,20 @@ MATRIX_SCHEMA = {
     "fixture": pl.String,
     "stage": pl.String,
     **COLUMN_STATS_SCHEMA,
+}
+
+# One row per semantic expectation evaluated in one run.
+SEMANTIC_SCHEMA = {
+    "run_id": pl.String,
+    "dbt_version": pl.String,
+    "fixture": pl.String,
+    "stage": pl.String,
+    "expectation_id": pl.String,
+    "expectation_class": pl.String,
+    # pass | fail | missing (the table or column it reads does not exist)
+    "result": pl.String,
+    # The observed value, rendered deterministically so it can be diffed.
+    "detail": pl.String,
 }
 
 # A (version, fixture, stage) cell is the unit of re-running.

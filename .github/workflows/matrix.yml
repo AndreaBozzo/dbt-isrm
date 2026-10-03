@@ -29,8 +29,15 @@ jobs:
         run: |
           args=()
           for v in $VERSIONS; do args+=(--version "$v"); done
-          uv run dbt-isrm run "${args[@]}"
+          # Without explicit versions, also run stable releases newer than the config.
+          discover=()
+          if [ ${#args[@]} -eq 0 ]; then discover=(--discover); fi
+          uv run dbt-isrm run "${args[@]}" "${discover[@]}" | tee run.log
           uv run dbt-isrm report "${args[@]}"
+          found=$(sed -n 's/^discovered (not in config): //p' run.log)
+          if [ -n "$found" ] && [ "$found" != "none" ]; then
+            echo "::warning title=New dbt release::not in configs/default.yml: $found"
+          fi
 
       - name: Job summary
         if: always()

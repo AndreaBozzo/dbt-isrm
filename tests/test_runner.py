@@ -1,11 +1,12 @@
 """Integration tests: these run a real dbt release (downloaded on first use)."""
 
+import duckdb
 import polars as pl
 import pytest
 
 from dbt_isrm import matrix
 from dbt_isrm.config import Stage, load_config
-from dbt_isrm.runner import DbtUnavailable, ensure_dbt, run_dbt
+from dbt_isrm.runner import DbtUnavailable, ensure_dbt, invocation_id, run_dbt
 
 VERSION = "2.0.6"
 
@@ -20,9 +21,19 @@ def config(repo, tmp_path):
     )
 
 
-def test_parse_to_matrix(config, repo):
-    ensure_dbt(VERSION)
-    record = run_dbt(config, VERSION, "basic_model", "parse")
+@pytest.fixture(scope="module")
+def build():
+    return ensure_dbt(VERSION)
+
+
+def test_build_identity(build):
+    assert build.version_output == f"dbt {VERSION}"
+    assert build.wheel_tag.startswith("cp311-abi3-")
+    assert len(build.binary_sha256) == 64
+
+
+def test_parse_to_matrix(config, repo, build):
+    record = run_dbt(config, build, VERSION, "basic_model", "parse")
 
     assert record.exit_code == 0 and not record.timed_out
     assert record.artifact_root == f"{VERSION}/basic_model/parse/info_schema"
@@ -41,10 +52,30 @@ def test_parse_to_matrix(config, repo):
     assert unique_id.select("row_count", "populated_count").rows() == [(2, 2)]
 
 
-def test_failed_run_is_recorded(config):
-    ensure_dbt(VERSION)
+def test_invocation_id_reaches_dbt(config, build):
+    record = run_dbt(config, build, VERSION, "basic_model", "build")
+    assert record.exit_code == 0
+    assert record.invocation_id == invocation_id("basic_model", "build")
+    assert record.dbt_args[-2:] == ["--invocation-id", record.invocation_id]
+    assert (record.dbt_version_output, record.dbt_binary_sha256) == (
+        build.version_output,
+        build.binary_sha256,
+    )
+
+    # dbt itself recorded the id we passed, so runtime tables are joinable to the run.
+    path = config.snapshots_dir / record.artifact_root / "v1" / "dbt_rt.run_results.parquet"
+    ids = duckdb.sql(f"SELECT DISTINCT invocation_id FROM read_parquet('{path.as_posix()}')")
+    assert ids.fetchall() == [(record.invocation_id,)]
+
+    matrix.store(record, config.results_dir, config.snapshots_dir)
+    semantic = pl.read_parquet(config.results_dir / "semantic.parquet")
+    assert semantic.filter(pl.col("result") == "missing").is_empty()
+    assert semantic["expectation_id"].to_list() == ["current_invocation_recorded"]
+
+
+def test_failed_run_is_recorded(config, build):
     config.stages["bogus"] = Stage(args=["not-a-dbt-command"])
-    record = run_dbt(config, VERSION, "basic_model", "bogus")
+    record = run_dbt(config, build, VERSION, "basic_model", "bogus")
 
     assert record.exit_code not in (0, None)
     assert record.artifact_root is None and record.table_count == 0

@@ -46,9 +46,10 @@ def classify_fields(matrix: pl.DataFrame) -> pl.DataFrame:
     )
 
 
-def summary(matrix: pl.DataFrame, runs: pl.DataFrame, version: str) -> str:
+def summary(matrix: pl.DataFrame, runs: pl.DataFrame, semantic: pl.DataFrame, version: str) -> str:
     matrix = matrix.filter(pl.col("dbt_version") == version)
     runs = runs.filter(pl.col("dbt_version") == version)
+    semantic = semantic.filter(pl.col("dbt_version") == version)
     if runs.is_empty():
         raise LookupError(f"no runs recorded for dbt {version}")
 
@@ -68,6 +69,16 @@ def summary(matrix: pl.DataFrame, runs: pl.DataFrame, version: str) -> str:
         lines.append(f"{label + ':':<22}{counts.get(label, 0)}")
     lines.append("")
     lines.append("'populated' excludes NULL and empty values: '', '[]', '{}', 'null', [].")
+    if not semantic.is_empty():
+        lines += ["", "semantic expectations (pass/cells):"]
+        status = (
+            semantic.group_by("expectation_id", "expectation_class")
+            .agg(passed=(pl.col("result") == "pass").sum(), cells=pl.len())
+            .sort("expectation_id")
+        )
+        for r in status.iter_rows(named=True):
+            label = f"{r['expectation_id']} ({r['expectation_class']})"
+            lines.append(f"  {label:<44}{r['passed']}/{r['cells']}")
     if not failed.is_empty():
         lines += ["", "non-zero exits:"]
         for row in failed.sort("fixture", "stage").iter_rows(named=True):

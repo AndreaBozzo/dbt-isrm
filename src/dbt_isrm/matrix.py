@@ -1,6 +1,6 @@
-"""Persist the long-form matrix and the run log.
+"""Persist the long-form matrix, the semantic results and the run log.
 
-Both files accumulate across invocations: re-running a (version, fixture,
+All three accumulate across invocations: re-running a (version, fixture,
 stage) cell replaces that cell's rows and leaves every other cell untouched,
 so the matrix can be built and refreshed one cell at a time.
 """
@@ -9,10 +9,16 @@ from pathlib import Path
 
 import polars as pl
 
+from dbt_isrm import expectations
 from dbt_isrm.artifacts import inspect_info_schema
 from dbt_isrm.models import CELL_KEYS, MATRIX_SCHEMA, RUNS_SCHEMA, RunRecord
 
 MATRIX_SORT = [*CELL_KEYS, "info_schema_version", "table", "column_position"]
+SEMANTIC_SORT = [*CELL_KEYS, "expectation_id"]
+
+
+class IncompatibleResults(RuntimeError):
+    """An existing results file was written with a different schema."""
 
 
 def matrix_rows(record: RunRecord, snapshots_dir: Path) -> pl.DataFrame:
@@ -42,7 +48,13 @@ def replace_cells(
     artifacts) still clears the rows a previous run left for that cell.
     """
     if path.exists():
-        existing = pl.read_parquet(path).join(cells.select(CELL_KEYS), on=CELL_KEYS, how="anti")
+        existing = pl.read_parquet(path)
+        if existing.schema != new.schema:
+            raise IncompatibleResults(
+                f"{path} was written by a different dbt-isrm version; "
+                "move results/ aside and re-run"
+            )
+        existing = existing.join(cells.select(CELL_KEYS), on=CELL_KEYS, how="anti")
         combined = pl.concat([existing, new], how="vertical")
     else:
         combined = new
@@ -54,9 +66,15 @@ def replace_cells(
 
 
 def store(record: RunRecord, results_dir: Path, snapshots_dir: Path) -> None:
-    """Add one finished run to `runs.parquet` and `matrix.parquet`."""
+    """Add one finished run to `runs`, `matrix` and `semantic` results."""
     runs = run_rows(record)
     replace_cells(results_dir / "runs.parquet", runs, runs, [*CELL_KEYS])
     replace_cells(
         results_dir / "matrix.parquet", matrix_rows(record, snapshots_dir), runs, MATRIX_SORT
+    )
+    replace_cells(
+        results_dir / "semantic.parquet",
+        expectations.evaluate(record, snapshots_dir),
+        runs,
+        SEMANTIC_SORT,
     )

@@ -32,11 +32,12 @@ Requires [uv](https://docs.astral.sh/uv/). Each dbt release runs in its own cach
 ```bash
 uv sync
 uv run dbt-isrm run                                   # configured matrix
+uv run dbt-isrm run --discover                        # plus newer stable releases on PyPI
 uv run dbt-isrm run --version 2.0.6 --fixture source --stage build
-uv run dbt-isrm inspect 2.0.6                         # population summary
+uv run dbt-isrm inspect 2.0.6                         # population and expectation summary
 uv run dbt-isrm inspect 2.0.6 node_columns.constraints
 uv run dbt-isrm diff 2.0.5 2.0.6                      # changes between two releases
-uv run dbt-isrm report                                # results/report.md, consecutive releases
+uv run dbt-isrm report                                # results/report.md, all recorded releases
 ```
 
 Filters combine and repeat. Versions need not be in the config. Re-running a
@@ -48,13 +49,30 @@ Per column of every Information Schema table, per run: DuckDB type, rows, NULLs,
 populated values, distinct values. **Empty** means `''`, `'[]'`, `'{}'`, `'null'` or a
 zero-length list, which dbt writes for unset fields.
 
-`diff` compares schema (tables, columns, types), row and population counts, and exit status,
-only over cells that produced artifacts in both releases. Paths, timestamps and run ids are
-never compared. Values are not profiled.
+`diff` compares schema (tables, columns, types), row and population counts, exit status and
+semantic results, only over cells that produced artifacts in both releases. Paths, timestamps
+and run ids are never compared. Values are not profiled.
+
+Counts cannot see a value that is present but wrong, so three **semantic expectations**
+([`expectations.py`](src/dbt_isrm/expectations.py)) read values directly:
+
+| expectation                        | class  | evidence                                                        |
+| ---------------------------------- | ------ | --------------------------------------------------------------- |
+| `constraints_exposed`              | must   | [#16553](https://github.com/dbt-labs/dbt/issues/16553)          |
+| `inferred_types_are_adapter_types` | open   | [#16515](https://github.com/dbt-labs/dbt/issues/16515)          |
+| `current_invocation_recorded`      | open   | [#16588](https://github.com/dbt-labs/dbt/issues/16588)          |
+
+`must`: contracted or confirmed upstream; pass → fail is a regression. `open`: recorded without a
+verdict.
+
+Each run records its identity: a per-cell `--invocation-id` (identical across releases), raw
+`dbt --version`, wheel tag, sha256 of the native binary, OS and architecture.
 
 ## Matrix
 
-[`configs/default.yml`](configs/default.yml): dbt 2.0.0–2.0.6, six fixtures, four stages.
+[`configs/default.yml`](configs/default.yml): dbt 2.0.0–2.0.6, six fixtures, four stages. New
+releases are added to the config by hand; `--discover` (used by the weekly workflow) runs newer
+stable releases meanwhile and the report marks them `(not in config)`.
 
 | stage            | command                                |
 | ---------------- | -------------------------------------- |
@@ -81,6 +99,7 @@ matrix run uses a fresh temporary copy.
 results/matrix.parquet   one row per (run, table, column); canonical
 results/matrix.json      same, as JSON
 results/runs.parquet     one row per dbt invocation, failures included
+results/semantic.parquet one row per (run, expectation)
 results/report.md        release-over-release report
 snapshots/<version>/<fixture>/<stage>/
     info_schema/  manifest.json  run_results.json  stdout.txt  stderr.txt

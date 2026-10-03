@@ -15,7 +15,9 @@ Upstream source read at `dbt-labs/dbt@7bbd974` (2026-10-02).
 - **Upstream:** known: [dbt-labs/dbt#16553](https://github.com/dbt-labs/dbt/issues/16553)
   (open, a maintainer says a fix PR is in flight). This is dbt-isrm's first reproduction of a
   known real-world behavior.
-- **Next:** when a release fixes it, the diff should show a population gain on both fields.
+- **Tracking:** a fix shows as a population gain on `node_columns.constraints` and
+  `constraints_exposed` → `fixed`. The fixture declares no model-level constraints, so
+  `models.constraints` is not exercised.
 
 ## 2. `dbt_rt.invocations` never contains the current invocation
 
@@ -96,7 +98,23 @@ Upstream source read at `dbt-labs/dbt@7bbd974` (2026-10-02).
    because the surface has been frozen since 2.0.0. The value is currently in the *stage ×
    fixture* view and in value-level checks, not the release diff.
 
-**Implication:** don't expand fixtures or versions yet. The next useful step is narrow: M3
-expectations on the handful of properties above (constraints, inferred types, invocations), so
-the matrix flags the fix when it lands. The release diff will matter once a release changes
-the surface; the scheduled CI run is there to catch that.
+**Implication:** don't expand fixtures or versions. Track the known defects instead (done, see
+below) and let new releases arrive.
+
+## Monitoring (2026-10-03)
+
+Findings 1–3 are semantic expectations (`src/dbt_isrm/expectations.py`); all fail in every
+applicable cell of 2.0.0–2.0.6:
+
+| expectation                        | class | 2.0.6 | tracks |
+| ---------------------------------- | ----- | ----- | ------ |
+| `constraints_exposed`              | must  | 0/4   | #16553 |
+| `inferred_types_are_adapter_types` | open  | 0/1   | #16515 |
+| `current_invocation_recorded`      | open  | 0/18  | #16588 |
+
+A fix appears in `report.md` as `fixed` (must) or `change` (open), at the release that ships it.
+
+New releases are not added automatically. The weekly `matrix` workflow runs with `--discover`:
+stable releases on PyPI newer than `configs/default.yml` are run, marked `(not in config)` in
+the report, and raise a workflow warning. Adding them to the config is a manual step. Nothing
+notifies beyond the workflow run itself.

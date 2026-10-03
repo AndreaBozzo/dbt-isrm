@@ -3,6 +3,7 @@
 import polars as pl
 
 from dbt_isrm.diff import Diff
+from dbt_isrm.expectations import EXPECTATIONS
 
 
 def field_name(row: dict, show_isv: bool) -> str:
@@ -41,6 +42,10 @@ def exec_cell(row: dict, side: str) -> str:
         f"{row[f'table_count_{side}']} tables" if row[f"has_artifacts_{side}"] else "no artifacts"
     )
     return f"{status}, {artifacts}"
+
+
+def semantic_cell(row: dict, side: str) -> str:
+    return f"{row[f'result_{side}']}: {row[f'detail_{side}']}"
 
 
 def render_text(d: Diff) -> str:
@@ -100,6 +105,20 @@ def render_text(d: Diff) -> str:
             f"  {exec_cell(r, 'a')} -> {exec_cell(r, 'b')}",
         ]
     sections.append(("EXECUTION CHANGES", execution))
+
+    semantic: list[str] = []
+    last = None
+    for r in d.semantic_changes.iter_rows(named=True):
+        name = f"{r['expectation_id']} ({r['expectation_class']})"
+        if name != last:
+            semantic += ["", name] if semantic else [name]
+            last = name
+        semantic += [
+            f"  {r['fixture']} / {r['stage']}  ({r['kind']})",
+            f"    {semantic_cell(r, 'a')}",
+            f"    -> {semantic_cell(r, 'b')}",
+        ]
+    sections.append(("SEMANTIC CHANGES", semantic))
 
     for title, lines in sections:
         if lines:
@@ -182,6 +201,39 @@ def _execution_md(d: Diff, isv: bool) -> list[str]:
     return _md_table(["fixture / stage", d.a, d.b], rows) if rows else []
 
 
+def _semantic_md(d: Diff, isv: bool) -> list[str]:
+    rows = [
+        [
+            f"`{r['expectation_id']}` ({r['expectation_class']})",
+            f"{r['fixture']} / {r['stage']}",
+            semantic_cell(r, "a"),
+            semantic_cell(r, "b"),
+            r["kind"],
+        ]
+        for r in d.semantic_changes.iter_rows(named=True)
+    ]
+    return _md_table(["expectation", "fixture / stage", d.a, d.b, "change"], rows) if rows else []
+
+
+def _semantic_status_md(semantic: pl.DataFrame, version: str) -> list[str]:
+    """Where each expectation stands in one release, whether or not it changed."""
+    rows = []
+    for e in EXPECTATIONS:
+        r = semantic.filter((pl.col("dbt_version") == version) & (pl.col("expectation_id") == e.id))
+        if r.is_empty():
+            continue
+        passed = r.filter(pl.col("result") == "pass").height
+        observed = "; ".join(sorted(set(r["detail"].to_list()))[:3])
+        rows.append([f"`{e.id}`", e.cls, f"{passed}/{r.height}", observed, e.evidence])
+    if not rows:
+        return []
+    return [
+        f"### Status in {version}",
+        "",
+        *_md_table(["expectation", "class", "pass", "observed", "evidence"], rows),
+    ]
+
+
 def _fields_md(attr: str):
     def render(d: Diff, isv: bool) -> list[str]:
         frame: pl.DataFrame = getattr(d, attr)
@@ -192,7 +244,13 @@ def _fields_md(attr: str):
     return render
 
 
-def render_markdown(diffs: list[Diff], fixtures: list[str], stages: list[str]) -> str:
+def render_markdown(
+    diffs: list[Diff],
+    fixtures: list[str],
+    stages: list[str],
+    semantic: pl.DataFrame,
+    unconfigured: frozenset[str] = frozenset(),
+) -> str:
     out = [
         "# dbt ISRM Report",
         "",
@@ -205,8 +263,10 @@ def render_markdown(diffs: list[Diff], fixtures: list[str], stages: list[str]) -
     ]
     for d in diffs:
         note = "no observable changes" if d.is_empty() else "changes"
+        new = " (not in config)" if d.b in unconfigured else ""
         out.append(
-            f"- {d.a} → {d.b}: {d.compared_cells.height}/{d.cells.height} cells compared, {note}"
+            f"- {d.a} → {d.b}{new}: {d.compared_cells.height}/{d.cells.height} cells compared, "
+            f"{note}"
         )
     out += [
         "",
@@ -225,21 +285,27 @@ def render_markdown(diffs: list[Diff], fixtures: list[str], stages: list[str]) -
     ]
     out += _md_section("Schema changes", diffs, _schema_md)
     out += _md_section("Population changes", diffs, _population_md)
-    out += ["## Semantic assertion changes", "", "No semantic expectations are defined yet.", ""]
+    out += _md_section("Semantic assertion changes", diffs, _semantic_md)
+    out += _semantic_status_md(semantic, diffs[-1].b)
+    out += [
+        "Classes: `must` is contracted or confirmed upstream (pass → fail is a regression);",
+        "`observed` and `open` are recorded without a verdict.",
+        "",
+    ]
     out += _md_section("Execution changes", diffs, _execution_md)
     out += _md_section(
-        "Newly always-null fields",
+        "Newly never-populated fields",
         diffs,
         _fields_md("newly_never_populated"),
     )
     out += _md_section(
-        "Fields no longer always-null",
+        "Fields no longer never-populated",
         diffs,
         _fields_md("no_longer_never_populated"),
     )
     out += [
-        "Always-null here means never populated: NULL or empty in every row of every compared",
-        "cell where the table had rows.",
+        "Never-populated: NULL or empty in every row of every compared cell where the table had",
+        "rows.",
         "",
     ]
     return "\n".join(out)

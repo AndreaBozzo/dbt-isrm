@@ -5,7 +5,8 @@ fixtures_dir: ../fixtures
 results_dir: ../results
 snapshots_dir: ../snapshots
 
-# Oldest first: reports compare each version with the one listed before it.
+# Releases to run. `dbt-isrm run --discover` (the scheduled workflow) also runs
+# stable releases on PyPI newer than these; add them here once reviewed.
 versions:
   - "2.0.0"
   - "2.0.1"

@@ -6,7 +6,9 @@ environment. Each run executes in a fresh temporary copy of the fixture, so
 no state (partial parse, DuckDB file, stale artifacts) leaks between runs.
 """
 
+import json
 import os
+import platform
 import re
 import shutil
 import subprocess
@@ -18,24 +20,46 @@ from pathlib import Path
 
 from dbt_isrm.artifacts import info_schema_versions
 from dbt_isrm.config import Config
-from dbt_isrm.models import RunRecord
+from dbt_isrm.models import DbtBuild, RunRecord
 
 # dbt artifacts preserved next to the Information Schema, when present.
 KEPT_TARGET_FILES = ("manifest.json", "run_results.json")
+
+# Runs inside the release's own environment to identify the build that executes.
+_BUILD_PROBE = """
+import hashlib, importlib.metadata as m, json
+d = m.distribution("dbt")
+core = [f for f in d.files if str(f).startswith("dbt/_core")]
+assert len(core) == 1, core
+tag = [l.split(": ", 1)[1] for l in d.read_text("WHEEL").splitlines() if l.startswith("Tag: ")]
+print(json.dumps({
+    "wheel_tag": ",".join(tag),
+    "binary_sha256": hashlib.sha256(core[0].locate().read_bytes()).hexdigest(),
+}))
+"""
 
 
 class DbtUnavailable(RuntimeError):
     """The requested dbt release could not be installed or is not what it claims."""
 
 
-def dbt_command(version: str) -> list[str]:
+def _tool_command(version: str, executable: str) -> list[str]:
     uv = shutil.which("uv")
     if uv is None:
         raise DbtUnavailable("`uv` was not found on PATH")
-    return [uv, "tool", "run", "--quiet", "--from", f"dbt=={version}", "dbt"]
+    return [uv, "tool", "run", "--quiet", "--from", f"dbt=={version}", executable]
 
 
-def ensure_dbt(version: str) -> None:
+def dbt_command(version: str) -> list[str]:
+    return _tool_command(version, "dbt")
+
+
+def invocation_id(fixture: str, stage: str) -> str:
+    """Stable per cell, so corresponding runs of different releases share an id."""
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"dbt-isrm:{fixture}/{stage}"))
+
+
+def ensure_dbt(version: str) -> DbtBuild:
     """Install the release if needed and check it reports the requested version.
 
     Runs before any fixture so that installation output never lands in a run's
@@ -53,12 +77,22 @@ def ensure_dbt(version: str) -> None:
     if match.group(1) != version:
         raise DbtUnavailable(f"requested dbt {version} but it reports {match.group(1)}")
 
+    probe = subprocess.run(
+        [*_tool_command(version, "python"), "-c", _BUILD_PROBE],
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    if probe.returncode != 0:
+        raise DbtUnavailable(f"could not identify the dbt {version} build:\n{probe.stderr}")
+    return DbtBuild(version_output=proc.stdout.strip(), **json.loads(probe.stdout))
+
 
 def cell_dir(config: Config, version: str, fixture: str, stage: str) -> Path:
     return config.snapshots_dir / version / fixture / stage
 
 
-def run_dbt(config: Config, version: str, fixture: str, stage: str) -> RunRecord:
+def run_dbt(config: Config, build: DbtBuild, version: str, fixture: str, stage: str) -> RunRecord:
     """Run one (version, fixture, stage) cell and snapshot its artifacts."""
     spec = config.stages[stage]
     fixture_dir = config.fixtures_dir / fixture
@@ -69,7 +103,8 @@ def run_dbt(config: Config, version: str, fixture: str, stage: str) -> RunRecord
     shutil.rmtree(out, ignore_errors=True)
     out.mkdir(parents=True)
 
-    dbt_args = [*spec.args, *config.common_args]
+    invocation = invocation_id(fixture, stage)
+    dbt_args = [*spec.args, *config.common_args, "--invocation-id", invocation]
     env = {**os.environ, **spec.env}
 
     with tempfile.TemporaryDirectory(prefix="isrm-", ignore_cleanup_errors=True) as tmp:
@@ -115,7 +150,13 @@ def run_dbt(config: Config, version: str, fixture: str, stage: str) -> RunRecord
         dbt_version=version,
         fixture=fixture,
         stage=stage,
+        invocation_id=invocation,
         dbt_args=dbt_args,
+        dbt_version_output=build.version_output,
+        dbt_wheel_tag=build.wheel_tag,
+        dbt_binary_sha256=build.binary_sha256,
+        os=f"{platform.system()} {platform.release()}",
+        arch=platform.machine(),
         warehouse=spec.warehouse,
         started_at=started_at,
         duration_ms=duration_ms,
