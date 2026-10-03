@@ -1,7 +1,6 @@
 # Findings
 
-Observations from dbt-isrm, with how far each has been followed upstream. Nothing here is filed
-or commented upstream unless it says so.
+Observations from dbt-isrm, with how far each has been followed upstream.
 
 Matrix as of 2026-10-03: dbt 2.0.0–2.0.6 × 6 fixtures × 4 stages, 168 runs, all exit 0.
 Upstream source read at `dbt-labs/dbt@7bbd974` (2026-10-02).
@@ -32,9 +31,8 @@ Upstream source read at `dbt-labs/dbt@7bbd974` (2026-10-02).
   general `--generate-info-schema` path has no such pass.
 - **Consequence:** `run_results JOIN invocations USING (invocation_id)` (the join in
   `crates/dbt-index-core/src/db.rs`) drops the current run's results.
-- **Upstream:** no matching issue found (searched for "dbt_rt invocations",
-  "run_results invocations info schema", "generate-info-schema"). Looks like a bug rather than
-  intent, given the `docs generate` workaround. **Not filed.**
+- **Upstream:** filed as [dbt-labs/dbt#16588](https://github.com/dbt-labs/dbt/issues/16588)
+  (2026-10-03), reproduced on 2.0.0 and 2.0.6.
 
 ## 3. `data_type_inferred` holds Arrow type names on DuckDB too
 
@@ -43,8 +41,8 @@ Upstream source read at `dbt-labs/dbt@7bbd974` (2026-10-02).
 - **Observation:** `Int32`, `Utf8`, `Decimal128(10, 2)` for columns declared `integer`,
   `varchar`, `decimal(10, 2)`.
 - **Upstream:** known for Snowflake:
-  [dbt-labs/dbt#16515](https://github.com/dbt-labs/dbt/issues/16515). This adds DuckDB as a
-  second adapter. **Not commented.**
+  [dbt-labs/dbt#16515](https://github.com/dbt-labs/dbt/issues/16515). DuckDB repro
+  [added](https://github.com/dbt-labs/dbt/issues/16515#issuecomment-5968924582) (2026-10-03).
 - **Instrument note:** the matrix calls this column 100% populated. Count-level statistics can't
   see wrong-kind values; this is the strongest argument for M3's semantic checks.
 
@@ -53,10 +51,12 @@ Upstream source read at `dbt-labs/dbt@7bbd974` (2026-10-02).
 - **Observation:** the `source` fixture's `on-run-start` hook yields 1 row in `dbt.hooks` in
   every stage of every release 2.0.0–2.0.6.
 - **Upstream:** [dbt-labs/dbt#16041](https://github.com/dbt-labs/dbt/issues/16041) (open,
-  2026-08-22) says the table is "always zero rows". It looks fixed before 2.0.0 and the issue
-  stale. **Not commented.**
-- **Unexplained, not investigated:** that row has `materialized = snapshot` and
-  `schema_name = public` (the fixture's models are in `main`).
+  2026-08-22) says the table is "always zero rows". It looks fixed before 2.0.0.
+  [Commented](https://github.com/dbt-labs/dbt/issues/16041#issuecomment-5968924805)
+  (2026-10-03).
+- **Remaining:** hook rows have `materialized = snapshot`, but operations carry no `config` in
+  `manifest.json`, so the value looks like a default (reported in the same comment).
+  `schema_name = public` is inherited from `manifest.json`.
 
 ## 5. Strict analysis of a source-backed model falls back to `off`
 
@@ -88,7 +88,8 @@ Upstream source read at `dbt-labs/dbt@7bbd974` (2026-10-02).
    counts, and also in raw values once volatile columns are excluded (checked 2.0.0 vs 2.0.6 by
    hashing every table).
 4. **Which correspond to known issues?** #1 (#16553), #3 (#16515); #4 contradicts #16041.
-5. **Which are unexplained?** #2 before reading the code; the `dbt.hooks` values in #4.
+5. **Which are unexplained?** #2 before reading the code (now filed as #16588); the
+   `materialized` value in #4.
 6. **Traced into the Rust implementation?** Yes: #2, to the write order in `dbt_lib.rs`.
 7. **Is this information not already obvious from dbt's own tests and issues?** Partly. #2 and
    the #16041 staleness are new. But release-over-release diffs have produced nothing so far,
